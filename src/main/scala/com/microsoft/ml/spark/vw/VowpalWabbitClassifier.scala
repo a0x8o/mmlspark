@@ -5,7 +5,7 @@ package com.microsoft.ml.spark.vw
 
 import com.microsoft.ml.spark.core.env.InternalWrapper
 import com.microsoft.ml.spark.core.schema.DatasetExtensions
-import org.apache.spark.ml.{ComplexParamsReadable, ComplexParamsWritable}
+import org.apache.spark.ml.ComplexParamsReadable
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.classification.{ProbabilisticClassificationModel, ProbabilisticClassifier}
@@ -17,13 +17,12 @@ import com.microsoft.ml.spark.core.schema.DatasetExtensions._
 
 import scala.math.exp
 
-object VowpalWabbitClassifier extends ComplexParamsReadable[VowpalWabbitClassifier]
+object VowpalWabbitClassifier extends DefaultParamsReadable[VowpalWabbitClassifier]
 
 @InternalWrapper
 class VowpalWabbitClassifier(override val uid: String)
   extends ProbabilisticClassifier[Row, VowpalWabbitClassifier, VowpalWabbitClassificationModel]
   with VowpalWabbitBase
-  with ComplexParamsWritable
 {
   def this() = this(Identifiable.randomUID("VowpalWabbitClassifier"))
 
@@ -61,8 +60,7 @@ class VowpalWabbitClassifier(override val uid: String)
 @InternalWrapper
 class VowpalWabbitClassificationModel(override val uid: String)
   extends ProbabilisticClassificationModel[Row, VowpalWabbitClassificationModel]
-    with VowpalWabbitBaseModel
-    with ComplexParamsWritable {
+    with VowpalWabbitBaseModel {
 
   def numClasses: Int = 2
 
@@ -91,13 +89,11 @@ class VowpalWabbitClassificationModel(override val uid: String)
 
   override def copy(extra: ParamMap): this.type = defaultCopy(extra)
 
-  override protected def raw2probabilityInPlace(rawPrediction: Vector): Vector =
-  {
+  protected override def predictRaw(features: Row): Vector = {
     throw new NotImplementedError("Not implemented")
   }
 
-  override protected def predictRaw(features: Row): Vector =
-  {
+  protected override def raw2probabilityInPlace(rawPrediction: Vector): Vector= {
     throw new NotImplementedError("Not implemented")
   }
 }

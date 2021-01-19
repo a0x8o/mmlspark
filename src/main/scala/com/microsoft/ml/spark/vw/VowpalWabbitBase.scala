@@ -5,23 +5,25 @@ package com.microsoft.ml.spark.vw
 
 import java.util.UUID
 
+import org.apache.spark.TaskContext
+import org.apache.spark.ml.linalg.{DenseVector, SparseVector}
+import org.apache.spark.ml.param._
+import org.apache.spark.ml.util.DefaultParamsWritable
+import org.apache.spark.sql.functions.{col, struct, udf}
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.{DataFrame, Dataset, Encoders, Row}
+import org.apache.spark.internal._
+import org.vowpalwabbit.spark.prediction.ScalarPrediction
+import org.vowpalwabbit.spark._
 import com.microsoft.ml.spark.core.contracts.{HasWeightCol, Wrappable}
 import com.microsoft.ml.spark.core.env.{InternalWrapper, StreamUtilities}
 import com.microsoft.ml.spark.core.utils.{ClusterUtil, StopWatch}
-import org.apache.spark.TaskContext
-import org.apache.spark.internal._
 import org.apache.spark.ml.ComplexParamsWritable
-import org.apache.spark.ml.param._
-import org.apache.spark.ml.util.DefaultParamsWritable
-import org.apache.spark.sql.functions.col
-import org.apache.spark.sql.types._
-import org.apache.spark.sql.{DataFrame, Dataset, Encoders, Row}
-import org.vowpalwabbit.spark._
 
+import scala.collection.JavaConverters._
 import scala.math.min
-import scala.util.{Failure, Success}
 
-case class NamespaceInfo(hash: Int, featureGroup: Char, colIdx: Int)
+case class NamespaceInfo (hash: Int, featureGroup: Char, colIdx: Int)
 
 // structure for the diagnostics dataframe
 case class TrainingStats(partitionId: Int,
@@ -40,10 +42,7 @@ case class TrainingStats(partitionId: Int,
                          timeTotalNs: Long,
                          timeNativeIngestNs: Long,
                          timeLearnNs: Long,
-                         timeMultipassNs: Long,
-                         ipsEstimate: Double,
-                         snipsEstimate: Double
-                        )
+                         timeMultipassNs: Long)
 
 case class TrainingResult(model: Option[Array[Byte]],
                           stats: TrainingStats)
@@ -55,7 +54,7 @@ case class TrainingResult(model: Option[Array[Byte]],
   * you'd get all quadratics for features in user/content
   * (the first letter is called feature group and VW users are used to it... before somebody starts complaining ;)
   */
-trait HasAdditionalFeatures extends Params {
+trait HasAdditionalFeatures extends Wrappable {
   val additionalFeatures = new StringArrayParam(this, "additionalFeatures", "Additional feature columns")
 
   def getAdditionalFeatures: Array[String] = $(additionalFeatures)
@@ -69,9 +68,11 @@ trait HasAdditionalFeatures extends Params {
   */
 @InternalWrapper
 trait VowpalWabbitBase extends Wrappable
+  with DefaultParamsWritable
   with HasWeightCol
   with HasAdditionalFeatures
-  with Logging {
+  with Logging
+{
   // can we switch to use meta programming (https://docs.scala-lang.org/overviews/macros/paradise.html)
   // to generate all the parameters?
   val args = new Param[String](this, "args", "VW command line arguments passed")
@@ -129,13 +130,6 @@ trait VowpalWabbitBase extends Wrappable
   def getFeaturesCol: String
   setDefault(featuresCol -> "features")
 
-  val useBarrierExecutionMode = new BooleanParam(this, "useBarrierExecutionMode",
-    "Use barrier execution mode, on by default.")
-  setDefault(useBarrierExecutionMode -> true)
-
-  def getUseBarrierExecutionMode: Boolean = $(useBarrierExecutionMode)
-  def setUseBarrierExecutionMode(value: Boolean): this.type = set(useBarrierExecutionMode, value)
-
   implicit class ParamStringBuilder(sb: StringBuilder) {
     def appendParamIfNotThere[T](optionShort: String, optionLong: String, param: Param[T]): StringBuilder = {
       if (get(param).isEmpty ||
@@ -155,17 +149,6 @@ trait VowpalWabbitBase extends Wrappable
         sb
       }
     }
-
-    def appendParamIfNotThere[T](optionLong: String): StringBuilder = {
-      if (s"--${optionLong}".r.findAllIn(sb.toString).hasNext) {
-        sb
-      }
-      else {
-        sb.append(s" --$optionLong")
-
-        sb
-      }
-    }
   }
 
   val hashSeed = new IntParam(this, "hashSeed", "Seed used for hashing")
@@ -180,33 +163,27 @@ trait VowpalWabbitBase extends Wrappable
   def getNumBits: Int = $(numBits)
   def setNumBits(value: Int): this.type = set(numBits, value)
 
-  protected def getAdditionalColumns(): Seq[String] = Seq.empty
-
-  // support numeric types as input
-  protected def getAsFloat(schema: StructType, idx: Int): Row => Float = {
-    schema.fields(idx).dataType match {
-      case _: DoubleType => {
-        log.warn(s"Casting column '${schema.fields(idx).name}' to float. Loss of precision.")
-        (row: Row) => row.getDouble(idx).toFloat
-      }
-      case _: FloatType => (row: Row) => row.getFloat(idx)
-      case _: IntegerType => (row: Row) => row.getInt(idx).toFloat
-      case _: LongType => (row: Row) => row.getLong(idx).toFloat
-    }
-  }
-
-  protected def createLabelSetter(schema: StructType): (Row, VowpalWabbitExample) => Unit = {
+  protected def createLabelSetter(schema: StructType) = {
     val labelColIdx = schema.fieldIndex(getLabelCol)
 
-    val labelGetter = getAsFloat(schema, labelColIdx)
     if (get(weightCol).isDefined) {
-      val weightGetter = getAsFloat(schema, schema.fieldIndex(getWeightCol))
+      val weightColIdx = schema.fieldIndex(getWeightCol)
       (row: Row, ex: VowpalWabbitExample) =>
-        ex.setLabel(weightGetter(row), labelGetter(row))
+        ex.setLabel(row.getDouble(weightColIdx).toFloat, row.getDouble(labelColIdx).toFloat)
     }
     else
-      (row: Row, ex: VowpalWabbitExample) => ex.setLabel(labelGetter(row))
+      (row: Row, ex: VowpalWabbitExample) => ex.setLabel(row.getDouble(labelColIdx).toFloat)
   }
+
+  /**
+    * Generate namespace info (hash, feature group, field index) for supplied columns.
+    * @param schema data frame schema to lookup column indices.
+    * @return
+    */
+  private def generateNamespaceInfos(schema: StructType): Array[NamespaceInfo] =
+    (Seq(getFeaturesCol) ++ getAdditionalFeatures)
+      .map(col => NamespaceInfo(VowpalWabbitMurmur.hash(col, getHashSeed), col.charAt(0), schema.fieldIndex(col)))
+      .toArray
 
   private def buildCommandLineArguments(vwArgs: String, contextArgs: => String = "") = {
     val args = new StringBuilder
@@ -228,154 +205,92 @@ trait VowpalWabbitBase extends Wrappable
 
     log.info(s"VowpalWabbit args: ${args}")
 
-    args
-  }
-
-  // Seperate method to be overridable
-  protected def trainRow(schema: StructType,
-                         inputRows: Iterator[Row],
-                         ctx: TrainContext
-                        ): Unit = {
-    val applyLabel = createLabelSetter(schema)
-    val featureColIndices = VowpalWabbitUtil.generateNamespaceInfos(
-      schema,
-      getHashSeed,
-      Seq(getFeaturesCol) ++ getAdditionalFeatures)
-
-    StreamUtilities.using(ctx.vw.createExample()) { example =>
-      for (row <- inputRows) {
-        ctx.nativeIngestTime.measure {
-          // transfer label
-          applyLabel(row, example)
-
-          // transfer features
-          VowpalWabbitUtil.addFeaturesToExample(featureColIndices, row, example)
-        }
-
-        // learn and cleanup
-        ctx.learnTime.measure {
-          try {
-            example.learn()
-          }
-          finally {
-            example.clear()
-          }
-        }
-      }
-    }
-  }
-
-  class TrainContext(val vw: VowpalWabbitNative,
-                     val contextualBanditMetrics: ContextualBanditMetrics = new ContextualBanditMetrics,
-                     val totalTime: StopWatch = new StopWatch,
-                     val nativeIngestTime: StopWatch = new StopWatch,
-                     val learnTime: StopWatch = new StopWatch,
-                     val multipassTime: StopWatch = new StopWatch) {
-    def getTrainResult(): Iterator[TrainingResult] = {
-      // only export the model on the first partition
-      val perfStats = vw.getPerformanceStatistics
-      val args = vw.getArguments
-
-      Seq(TrainingResult(
-        if (TaskContext.get.partitionId == 0) Some(vw.getModel) else None,
-        TrainingStats(
-          TaskContext.get.partitionId,
-          args.getArgs,
-          args.getLearningRate,
-          args.getPowerT,
-          args.getHashSeed,
-          args.getNumBits,
-          perfStats.getNumberOfExamplesPerPass,
-          perfStats.getWeightedExampleSum,
-          perfStats.getWeightedLabelSum,
-          perfStats.getAverageLoss,
-          perfStats.getBestConstant,
-          perfStats.getBestConstantLoss,
-          perfStats.getTotalNumberOfFeatures,
-          totalTime.elapsed,
-          nativeIngestTime.elapsed,
-          learnTime.elapsed,
-          multipassTime.elapsed,
-          contextualBanditMetrics.getIpsEstimate(),
-          contextualBanditMetrics.getSnipsEstimate()
-        ))).iterator
-    }
+    args.result
   }
 
   /**
     * Internal training loop.
-    *
-    * @param df          the input data frame.
-    * @param vwArgs      vw command line arguments.
+    * @param df the input data frame.
+    * @param vwArgs vw command line arguments.
     * @param contextArgs This lambda returns command line arguments that are executed in the final execution context.
     *                    It is used to get the partition id.
     */
   private def trainInternal(df: DataFrame, vwArgs: String, contextArgs: => String = "") = {
+    val applyLabel = createLabelSetter(df.schema)
 
-    val schema = df.schema
+    val featureColIndices = generateNamespaceInfos(df.schema)
 
     def trainIteration(inputRows: Iterator[Row],
                        localInitialModel: Option[Array[Byte]]): Iterator[TrainingResult] = {
 
       // construct command line arguments
       val args = buildCommandLineArguments(vwArgs, contextArgs)
+
       val totalTime = new StopWatch
       val nativeIngestTime = new StopWatch
       val learnTime = new StopWatch
       val multipassTime = new StopWatch
 
-      val (model, stats) = StreamUtilities.using(if (localInitialModel.isEmpty) new VowpalWabbitNative(args.result)
-      else new VowpalWabbitNative(args.result, localInitialModel.get)) { vw =>
-        val trainContext = new TrainContext(vw)
+      StreamUtilities.using(if (localInitialModel.isEmpty) new VowpalWabbitNative(args)
+        else new VowpalWabbitNative(args, localInitialModel.get)) { vw =>
+        StreamUtilities.using(vw.createExample()) { ex =>
+            // pass data to VW native part
+            totalTime.measure {
+              for (row <- inputRows) {
+                nativeIngestTime.measure {
+                  // transfer label
+                  applyLabel(row, ex)
 
-        val result = StreamUtilities.using(vw.createExample()) { ex =>
-          // pass data to VW native part
-          totalTime.measure {
-            trainRow(schema, inputRows, trainContext)
+                  // transfer features
+                  for (ns <- featureColIndices)
+                    row.get(ns.colIdx) match {
+                      case dense: DenseVector => ex.addToNamespaceDense(ns.featureGroup,
+                        ns.hash, dense.values)
+                      case sparse: SparseVector => ex.addToNamespaceSparse(ns.featureGroup,
+                        sparse.indices, sparse.values)
+                    }
+                }
 
-            multipassTime.measure {
-              vw.endPass()
+                learnTime.measure {
+                  ex.learn()
+                  ex.clear()
+                }
+              }
 
-              if (getNumPasses > 1)
-                vw.performRemainingPasses()
+              multipassTime.measure {
+                vw.endPass()
+
+                if (getNumPasses > 1)
+                  vw.performRemainingPasses()
+              }
             }
           }
-        }
 
-        // If the using statement failed rethrow here.
-        result match {
-          case Failure(exception) => throw exception
-          case Success(_) => Unit
-        }
+          // only export the model on the first partition
+          val perfStats = vw.getPerformanceStatistics
+          val args = vw.getArguments
 
-        // only export the model on the first partition
-        val perfStats = vw.getPerformanceStatistics
-        val args = vw.getArguments
-
-        (if (TaskContext.get.partitionId == 0) Some(vw.getModel) else None,
-          TrainingStats(
-            TaskContext.get.partitionId,
-            args.getArgs,
-            args.getLearningRate,
-            args.getPowerT,
-            args.getHashSeed,
-            args.getNumBits,
-            perfStats.getNumberOfExamplesPerPass,
-            perfStats.getWeightedExampleSum,
-            perfStats.getWeightedLabelSum,
-            perfStats.getAverageLoss,
-            perfStats.getBestConstant,
-            perfStats.getBestConstantLoss,
-            perfStats.getTotalNumberOfFeatures,
-            totalTime.elapsed,
-            nativeIngestTime.elapsed,
-            learnTime.elapsed,
-            multipassTime.elapsed,
-            trainContext.contextualBanditMetrics.getIpsEstimate(),
-            trainContext.contextualBanditMetrics.getSnipsEstimate()))
-      }.get // this will throw if there was an exception
-
-      Seq(TrainingResult(model, stats)).iterator
+          Seq(TrainingResult(
+            if (TaskContext.get.partitionId == 0) Some(vw.getModel) else None,
+            TrainingStats(
+              TaskContext.get.partitionId,
+              args.getArgs,
+              args.getLearningRate,
+              args.getPowerT,
+              args.getHashSeed,
+              args.getNumBits,
+              perfStats.getNumberOfExamplesPerPass,
+              perfStats.getWeightedExampleSum,
+              perfStats.getWeightedLabelSum,
+              perfStats.getAverageLoss,
+              perfStats.getBestConstant,
+              perfStats.getBestConstantLoss,
+              perfStats.getTotalNumberOfFeatures,
+              totalTime.elapsed,
+              nativeIngestTime.elapsed,
+              learnTime.elapsed,
+              multipassTime.elapsed))).iterator
+        }.get // this will throw if there was an exception
     }
 
     val encoder = Encoders.kryo[TrainingResult]
@@ -384,23 +299,21 @@ trait VowpalWabbitBase extends Wrappable
     val localInitialModel = if (isDefined(initialModel)) Some(getInitialModel) else None
 
     // dispatch to exectuors and collect the model of the first partition (everybody has the same at the end anyway)
-    // important to trigger collect() here so that the spanning tree is still up
-    if (getUseBarrierExecutionMode)
-      df.rdd.barrier().mapPartitions(inputRows => trainIteration(inputRows, localInitialModel)).collect()
-    else
-      df.mapPartitions(inputRows => trainIteration(inputRows, localInitialModel))(encoder).collect()
+    df.mapPartitions(inputRows => trainIteration(inputRows, localInitialModel))(encoder)
+      // important to trigger here so that the spanning tree is still up
+      .collect()
   }
 
   /**
     * Setup spanning tree and invoke training.
     * @param df input data.
     * @param vwArgs VW command line arguments.
-    * @param numTasks number of target tasks.
+    * @param numWorkers number of target workers.
     * @return
     */
   protected def trainInternalDistributed(df: DataFrame,
                                          vwArgs: StringBuilder,
-                                         numTasks: Int): Array[TrainingResult] = {
+                                         numWorkers: Int): Array[TrainingResult] = {
     // multiple partitions -> setup distributed coordination
     val spanningTree = new ClusterSpanningTree(0, getArgs.contains("--quiet"))
 
@@ -420,7 +333,7 @@ trait VowpalWabbitBase extends Wrappable
       --holdout_off should be included for distributed training
       */
       vwArgs.append(s" --holdout_off --span_server $driverHostAddress --span_server_port $port ")
-        .append(s"--unique_id $jobUniqueId --total $numTasks ")
+        .append(s"--unique_id $jobUniqueId --total $numWorkers ")
 
       trainInternal(df, vwArgs.result, s"--node ${TaskContext.get.partitionId}")
     } finally {
@@ -444,23 +357,15 @@ trait VowpalWabbitBase extends Wrappable
     val timeMultipassCol = col("timeMultipassNs")
     val timeTotalCol = col("timeTotalNs")
 
-    val diagRdd = dataset.sparkSession.createDataFrame(trainingResults.map {
-      _.stats
-    })
-      .withColumn("timeMarshalPercentage", timeMarshalCol / timeTotalCol)
-      .withColumn("timeLearnPercentage", timeLearnCol / timeTotalCol)
-      .withColumn("timeMultipassPercentage", timeMultipassCol / timeTotalCol)
-      .withColumn("timeSparkReadPercentage",
-        (timeTotalCol - timeMarshalCol - timeLearnCol - timeMultipassCol) / timeTotalCol)
+    val diagRdd = dataset.sparkSession.createDataFrame(trainingResults.map { _.stats })
+        .withColumn("timeMarshalPercentage", timeMarshalCol / timeTotalCol)
+        .withColumn("timeLearnPercentage",timeLearnCol / timeTotalCol)
+        .withColumn("timeMultipassPercentage",timeMultipassCol / timeTotalCol)
+        .withColumn("timeSparkReadPercentage",
+          (timeTotalCol - timeMarshalCol - timeLearnCol - timeMultipassCol) / timeTotalCol)
 
     model.setPerformanceStatistics(diagRdd)
   }
-
-  /***
-    * Allow subclasses to add further arguments
-    * @param args argument builder to append to
-    */
-  protected def addExtraArgs(args: StringBuilder): Unit = {}
 
   /**
     * Main training loop
@@ -469,32 +374,26 @@ trait VowpalWabbitBase extends Wrappable
     */
   protected def trainInternal[T <: VowpalWabbitBaseModel](dataset: Dataset[_], model: T): T = {
     // follow LightGBM pattern
-    val numTasksPerExec = ClusterUtil.getNumTasksPerExecutor(dataset, log)
-    val numExecutorTasks = ClusterUtil.getNumExecutorTasks(dataset, numTasksPerExec, log)
-    val numTasks = min(numExecutorTasks, dataset.rdd.getNumPartitions)
+    val numCoresPerExec = ClusterUtil.getNumCoresPerExecutor(dataset, log)
+    val numExecutorCores = ClusterUtil.getNumExecutorCores(dataset, numCoresPerExec, log)
+    val numWorkers = min(numExecutorCores, dataset.rdd.getNumPartitions)
 
     // Select needed columns, maybe get the weight column, keeps mem usage low
     val dfSubset = dataset.toDF().select((
-      Seq(getFeaturesCol, getLabelCol) ++
+        Seq(getFeaturesCol, getLabelCol) ++
         getAdditionalFeatures ++
-        getAdditionalColumns ++
         Seq(get(weightCol)).flatten
       ).map(col): _*)
 
     // Reduce number of partitions to number of executor cores
-    val df = if (dataset.rdd.getNumPartitions > numTasks) {
-      if (getUseBarrierExecutionMode) { // see [SPARK-24820][SPARK-24821]
-        dfSubset.repartition(numTasks)
-      }
-      else {
-        dfSubset.coalesce(numTasks)
-      }
-    } else
-      dfSubset
+    val df = if (dataset.rdd.getNumPartitions > numWorkers)
+        dfSubset.coalesce(numWorkers)
+      else
+        dfSubset
 
     // add exposed parameters to the final command line args
     val vwArgs = new StringBuilder()
-      .append(getArgs)
+      .append(s"${getArgs} --save_resume --preserve_performance_counters ")
       .appendParamIfNotThere("hash_seed", "hash_seed", hashSeed)
       .appendParamIfNotThere("b", "bit_precision", numBits)
       .appendParamIfNotThere("l", "learning_rate", learningRate)
@@ -504,14 +403,11 @@ trait VowpalWabbitBase extends Wrappable
       .appendParamIfNotThere("ignore", "ignore", ignoreNamespaces)
       .appendParamIfNotThere("q", "quadratic", interactions)
 
-    // Allows subclasses to add further specific args
-    addExtraArgs(vwArgs)
-
-     // call training
-    val trainingResults = (if (numTasks == 1)
+    // call training
+    val trainingResults = (if (numWorkers == 1)
       trainInternal(df, vwArgs.result)
     else
-      trainInternalDistributed(df, vwArgs, numTasks))
+      trainInternalDistributed(df, vwArgs, numWorkers))
 
     // store results in model
     applyTrainingResultsToModel(model, trainingResults, dataset)

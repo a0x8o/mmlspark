@@ -38,7 +38,6 @@ class VerifyVowpalWabbitClassifier extends Benchmarks with EstimatorFuzzing[Vowp
 
     // save model
     val saveDir = new File(tmpDir.toFile, "vw-model")
-
     model.saveNativeModel(saveDir.toString)
 
     assert(saveDir.exists)
@@ -132,14 +131,12 @@ class VerifyVowpalWabbitClassifier extends Benchmarks with EstimatorFuzzing[Vowp
     assert(labelOneCnt == 275)
   }
 
-  private def testVerifyVowpalWabbitClassifierWithLibSVM(useBarrierMode: Boolean): Unit = {
+  test("Verify VowpalWabbit Classifier can be run with libsvm") {
     val dataset = getAlaTrainDataFrame()
 
     val vw = new VowpalWabbitClassifier()
-      .setArgs("--passes 3")
       .setPowerT(0.3)
       .setNumPasses(3)
-      .setUseBarrierExecutionMode(useBarrierMode)
       .setLabelConversion(false)
 
     val classifier = vw.fit(dataset)
@@ -149,17 +146,6 @@ class VerifyVowpalWabbitClassifier extends Benchmarks with EstimatorFuzzing[Vowp
 
     assert(labelOneCnt < dataset.count)
     assert(labelOneCnt > 10)
-
-    val readableModel = classifier.getReadableModel
-    assert(readableModel.length > 10)
-  }
-
-  test("Verify VowpalWabbit Classifier can be run with libsvm (barrier mode)") {
-    testVerifyVowpalWabbitClassifierWithLibSVM(true)
-  }
-
-  test("Verify VowpalWabbit Classifier can be run with libsvm (no barrier mode)") {
-    testVerifyVowpalWabbitClassifierWithLibSVM(false)
   }
 
   test("Verify VowpalWabbit Classifier does not generate duplicate options (short)") {
@@ -172,10 +158,8 @@ class VerifyVowpalWabbitClassifier extends Benchmarks with EstimatorFuzzing[Vowp
       .setNumBits(22)
       .setLabelConversion(false)
 
-    val classifier = vw.fit(dataset)
-
     // command line args take precedence
-    assert(classifier.vwArgs.getNumBits == 15)
+    assert(vw.fit(dataset).vwArgs.getNumBits == 15)
   }
 
   test("Verify VowpalWabbit Classifier does not generate duplicate options (long)") {
@@ -266,7 +250,7 @@ class VerifyVowpalWabbitClassifier extends Benchmarks with EstimatorFuzzing[Vowp
     val dataset  = session.createDataFrame(Seq(
       ClassificationInput[String](1, "marie markus fun"),
       ClassificationInput[String](0, "marie markus no fun")
-    )).repartition(1)
+    )).coalesce(1)
 
     val datasetFeaturized = featurizer.transform(dataset)
 

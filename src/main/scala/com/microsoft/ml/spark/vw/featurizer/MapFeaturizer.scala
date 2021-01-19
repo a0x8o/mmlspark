@@ -17,7 +17,7 @@ import scala.collection.mutable
   * @param valueFeaturizer featurizer for value type.
   * @tparam T value type.
   */
-private[ml] class MapFeaturizer[T](override val fieldIdx: Int, override val columnName: String, val namespaceHash: Int,
+class MapFeaturizer[T](override val fieldIdx: Int, override val columnName: String, val namespaceHash: Int,
                        val mask: Int, val valueFeaturizer: T => Double)
   extends Featurizer(fieldIdx) {
 
@@ -43,3 +43,4 @@ private[ml] class MapFeaturizer[T](override val fieldIdx: Int, override val colu
     }
   }
 }
+

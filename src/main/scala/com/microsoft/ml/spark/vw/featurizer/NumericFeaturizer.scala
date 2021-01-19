@@ -14,48 +14,35 @@ import scala.collection.mutable
   * @param columnName used as feature name prefix.
   * @param namespaceHash pre-hashed namespace.
   * @param mask bit mask applied to final hash.
+  * @param getFieldValue lambda to unify the cast/conversion to double.
   */
-private[ml] class NumericFeaturizer[T: Numeric](override val fieldIdx: Int,
-                                 override val columnName: String,
-                                 val namespaceHash: Int,
-                                 val mask: Int,
-                                 val zero: Numeric[T])
-  extends Featurizer(fieldIdx) with ElementFeaturizer[T] {
+class NumericFeaturizer(override val fieldIdx: Int, override val columnName: String, namespaceHash: Int,
+                        mask: Int, val getFieldValue: Row => Double)
+  extends Featurizer(fieldIdx) {
 
   /**
     * Pre-hashed feature index.
     */
-  val featureIdx: Int = mask & VowpalWabbitMurmur.hash(columnName, namespaceHash)
+  val featureIdx = mask & VowpalWabbitMurmur.hash(columnName, namespaceHash)
 
+  /**
+    * Featurize a single row.
+    * @param row input row.
+    * @param indices output indices.
+    * @param values output values.
+    * @note this interface isn't very Scala-esce, but it avoids lots of allocation.
+    *       Also due to SparseVector limitations we don't support 64bit indices (e.g. indices are signed 32bit ints)
+    */
   override def featurize(row: Row,
                          indices: mutable.ArrayBuilder[Int],
                          values: mutable.ArrayBuilder[Double]): Unit = {
-      featurize(0, row.getAs[T](fieldIdx), indices, values)
-  }
+    val value = getFieldValue(row)
 
-  def featurize(idx: Int,
-                value: T,
-                indices: mutable.ArrayBuilder[Int],
-                values: mutable.ArrayBuilder[Double]): Unit = {
     // Note: 0 valued features are always filtered.
-    if (value != zero.zero) {
-      indices += featureIdx + idx
-      // This is weird but zero is a numeric typeclass that is used to convert the generic T to a double.
-      values += zero.toDouble(value)
+    if (value != 0) {
+        indices += featureIdx
+        values += value
     }
     ()
   }
-}
-
-class NullableNumericFeaturizer[T: Numeric](override val fieldIdx: Int,
-                           override val columnName: String,
-                           override val namespaceHash: Int,
-                           override val mask: Int,
-                           override val zero: Numeric[T])
-  extends NumericFeaturizer[T](fieldIdx, columnName, namespaceHash, mask, zero) {
-  override def featurize(row: Row,
-                         indices: mutable.ArrayBuilder[Int],
-                         values: mutable.ArrayBuilder[Double]): Unit =
-    if (!row.isNullAt(fieldIdx))
-      super.featurize(row, indices, values)
 }

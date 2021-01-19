@@ -2,10 +2,8 @@ import java.io.{File, PrintWriter}
 import java.net.URL
 
 import org.apache.commons.io.FileUtils
-import sbt.ExclusionRule
 import sbt.internal.util.ManagedLogger
-import scala.xml.{Node => XmlNode, NodeSeq => XmlNodeSeq, _}
-import scala.xml.transform.{RewriteRule, RuleTransformer}
+
 import scala.sys.process.Process
 
 val condaEnvName = "mmlspark"
@@ -13,55 +11,25 @@ name := "mmlspark"
 organization := "com.microsoft.ml.spark"
 scalaVersion := "2.11.12"
 
-val sparkVersion = "2.4.5"
-
-val excludes = Seq(
-  ExclusionRule("org.apache.spark", "spark-tags_2.11"),
-  ExclusionRule("org.scalatic"),
-  ExclusionRule("org.scalatest")
-)
+val sparkVersion = "2.4.3"
 
 libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-core" % sparkVersion % "compile",
   "org.apache.spark" %% "spark-mllib" % sparkVersion % "compile",
-  "org.apache.spark" %% "spark-tags" % sparkVersion % "test",
-  "org.scalactic" %% "scalactic" % "3.0.5" % "test",
-  "org.scalatest" %% "scalatest" % "3.0.5" % "test",
-  "io.spray" %% "spray-json" % "1.3.2" excludeAll (excludes: _*),
-  "com.microsoft.cntk" % "cntk" % "2.4" excludeAll (excludes: _*),
-  "org.openpnp" % "opencv" % "3.2.0-1" excludeAll (excludes: _*),
-  "com.jcraft" % "jsch" % "0.1.54" excludeAll (excludes: _*),
-  "com.microsoft.cognitiveservices.speech" % "client-sdk" % "1.14.0" excludeAll (excludes: _*),
-  "org.apache.httpcomponents" % "httpclient" % "4.5.6" excludeAll (excludes: _*),
-  "org.apache.httpcomponents" % "httpmime" % "4.5.6" excludeAll (excludes: _*),
-  "com.microsoft.ml.lightgbm" % "lightgbmlib" % "2.3.180" excludeAll (excludes: _*),
-  "com.github.vowpalwabbit" % "vw-jni" % "8.8.1" excludeAll (excludes: _*),
-  "com.linkedin.isolation-forest" %% "isolation-forest_2.4.3" % "0.3.2" excludeAll (excludes: _*),
-  "org.apache.spark" %% "spark-avro" % sparkVersion % "provided",
+  "org.scalactic" %% "scalactic" % "3.0.5",
+  "org.scalatest" %% "scalatest" % "3.0.5",
+  "io.spray" %% "spray-json" % "1.3.2",
+  "com.microsoft.cntk" % "cntk" % "2.4",
+  "org.openpnp" % "opencv" % "3.2.0-1",
+  "com.jcraft" % "jsch" % "0.1.54",
+  "com.jcraft" % "jsch" % "0.1.54",
+  "org.apache.httpcomponents" % "httpclient" % "4.5.6",
+  "com.microsoft.ml.lightgbm" % "lightgbmlib" % "2.3.100",
+  "com.github.vowpalwabbit" %  "vw-jni" % "8.7.0.3"
 )
 
-def txt(e: Elem, label: String): String = "\"" + e.child.filter(_.label == label).flatMap(_.text).mkString + "\""
-
-// skip dependency elements with a scope
-pomPostProcess := { (node: XmlNode) =>
-  new RuleTransformer(new RewriteRule {
-    override def transform(node: XmlNode): XmlNodeSeq = node match {
-      case e: Elem if e.label == "dependency"
-        && e.child.exists(child => child.label == "scope") =>
-        Comment(
-          s""" scoped dependency ${txt(e, "groupId")} % ${txt(e, "artifactId")}
-             |% ${txt(e, "version")} % ${txt(e, "scope")} has been omitted """.stripMargin)
-      case e: Elem if e.label == "dependency"
-        && e.child.exists(child => child.text == "org.scala-lang") =>
-        Comment(
-          s""" scala-lang dependency ${txt(e, "groupId")} % ${txt(e, "artifactId")}
-             |% ${txt(e, "version")} has been omitted """.stripMargin)
-      case _ => node
-    }
-  }).transform(node).head
-}
-
-resolvers += "Speech" at "https://mmlspark.blob.core.windows.net/maven/"
+//noinspection ScalaStyle
+lazy val IntegrationTest2 = config("it").extend(Test)
 
 def join(folders: String*): File = {
   folders.tail.foldLeft(new File(folders.head)) { case (f, s) => new File(f, s) }
@@ -89,12 +57,8 @@ cleanCondaEnvTask := {
     new File(".")) ! s.log
 }
 
-def isWindows: Boolean = {
-  sys.props("os.name").toLowerCase.contains("windows")
-}
-
 def osPrefix: Seq[String] = {
-  if (isWindows) {
+  if (sys.props("os.name").toLowerCase.contains("windows")) {
     Seq("cmd", "/C")
   } else {
     Seq()
@@ -131,18 +95,9 @@ generatePythonDoc := {
 
 }
 
-val pythonizedVersion = settingKey[String]("Pythonized version")
-pythonizedVersion := {
-  if (version.value.contains("-")) {
-    version.value.split("-".head).head + ".dev1"
-  } else {
-    version.value
-  }
-}
-
 def uploadToBlob(source: String, dest: String,
                  container: String, log: ManagedLogger,
-                 accountName: String = "mmlspark"): Int = {
+                 accountName: String="mmlspark"): Int = {
   val command = Seq("az", "storage", "blob", "upload-batch",
     "--source", source,
     "--destination", container,
@@ -153,8 +108,8 @@ def uploadToBlob(source: String, dest: String,
 }
 
 def downloadFromBlob(source: String, dest: String,
-                     container: String, log: ManagedLogger,
-                     accountName: String = "mmlspark"): Int = {
+                 container: String, log: ManagedLogger,
+                 accountName: String="mmlspark"): Int = {
   val command = Seq("az", "storage", "blob", "download-batch",
     "--destination", dest,
     "--pattern", source,
@@ -164,8 +119,8 @@ def downloadFromBlob(source: String, dest: String,
   Process(osPrefix ++ command) ! log
 }
 def singleUploadToBlob(source: String, dest: String,
-                       container: String, log: ManagedLogger,
-                       accountName: String = "mmlspark", extraArgs: Seq[String] = Seq()): Int = {
+                 container: String, log: ManagedLogger,
+                 accountName: String="mmlspark", extraArgs: Seq[String] = Seq()): Int = {
   val command = Seq("az", "storage", "blob", "upload",
     "--file", source,
     "--container-name", container,
@@ -197,15 +152,23 @@ publishDocs := {
 val publishR = TaskKey[Unit]("publishR", "publish R package to blob")
 publishR := {
   val s = streams.value
-  (runMain in Test).toTask(" com.microsoft.ml.spark.codegen.CodeGen").value
+  (run in IntegrationTest2).toTask("").value
   val rPackage = join("target", "scala-2.11", "generated", "package", "R")
     .listFiles().head
-  singleUploadToBlob(rPackage.toString, rPackage.getName, "rrr", s.log)
+  singleUploadToBlob(rPackage.toString,rPackage.getName, "rrr", s.log)
+}
+
+def pythonizeVersion(v: String): String = {
+  if (v.contains("-")){
+    v.split("-".head).head + ".dev1"
+  }else{
+    v
+  }
 }
 
 packagePythonTask := {
   val s = streams.value
-  (runMain in Test).toTask(" com.microsoft.ml.spark.codegen.CodeGen").value
+  (run in IntegrationTest2).toTask("").value
   createCondaEnvTask.value
   val destPyDir = join("target", "scala-2.11", "classes", "mmlspark")
   if (destPyDir.exists()) FileUtils.forceDelete(destPyDir)
@@ -214,7 +177,8 @@ packagePythonTask := {
   Process(
     activateCondaEnv ++
       Seq(s"python", "setup.py", "bdist_wheel", "--universal", "-d", s"${pythonPackageDir.absolutePath}"),
-    pythonSrcDir) ! s.log
+    pythonSrcDir,
+    "MML_PY_VERSION" -> pythonizeVersion(version.value)) ! s.log
 }
 
 val installPipPackageTask = TaskKey[Unit]("installPipPackage", "install python sdk")
@@ -224,8 +188,8 @@ installPipPackageTask := {
   publishLocal.value
   packagePythonTask.value
   Process(
-    activateCondaEnv ++ Seq("pip", "install", "-I",
-      s"mmlspark-${pythonizedVersion.value}-py2.py3-none-any.whl"),
+    activateCondaEnv ++ Seq("pip", "install",
+      s"mmlspark-${pythonizeVersion(version.value)}-py2.py3-none-any.whl"),
     pythonPackageDir) ! s.log
 }
 
@@ -235,20 +199,19 @@ testPythonTask := {
   val s = streams.value
   installPipPackageTask.value
   Process(
-    activateCondaEnv ++ Seq("python",
-      "-m",
-      "pytest",
+    activateCondaEnv ++ Seq("pytest",
       "--cov=mmlspark",
-      "--junitxml=../../../../python-test-results.xml",
+      "--junitxml=target/python-test-results.xml",
       "--cov-report=xml",
-      "mmlsparktest"
+      "target/scala-2.11/generated/test/python/mmlspark"
     ),
-    new File("target/scala-2.11/generated/test/python/"),
+    new File("."),
+    "MML_VERSION" -> version.value
   ) ! s.log
 }
 
 val getDatasetsTask = TaskKey[Unit]("getDatasets", "download datasets used for testing")
-val datasetName = "datasets-2020-08-27.tgz"
+val datasetName = "datasets-2019-05-02.tgz"
 val datasetUrl = new URL(s"https://mmlspark.blob.core.windows.net/installers/$datasetName")
 val datasetDir = settingKey[File]("The directory that holds the dataset")
 datasetDir := {
@@ -270,19 +233,19 @@ genBuildInfo := {
 
   val buildInfo =
     s"""
-       |MMLSpark Build and Release Information
-       |---------------
-       |
-       |### Maven Coordinates
-       | `${organization.value}:${name.value}_2.11:${version.value}`
-       |
-       |### Maven Resolver
-       | `https://mmlspark.azureedge.net/maven`
-       |
-       |### Documentation Pages:
-       |[Scala Documentation](https://mmlspark.blob.core.windows.net/docs/${version.value}/scala/index.html)
-       |[Python Documentation](https://mmlspark.blob.core.windows.net/docs/${version.value}/pyspark/index.html)
-       |
+      |MMLSpark Build and Release Information
+      |---------------
+      |
+      |### Maven Coordinates
+      | `${organization.value}:${name.value}_2.11:${version.value}`
+      |
+      |### Maven Resolver
+      | `https://mmlspark.azureedge.net/maven`
+      |
+      |### Documentation Pages:
+      |[Scala Documentation](https://mmlspark.blob.core.windows.net/docs/${version.value}/scala/index.html)
+      |[Python Documentation](https://mmlspark.blob.core.windows.net/docs/${version.value}/pyspark/index.html)
+      |
     """.stripMargin
 
   val infoFile = join("target", "Build.md")
@@ -294,6 +257,7 @@ val setupTask = TaskKey[Unit]("setup", "set up library for intellij")
 setupTask := {
   (Compile / compile).toTask.value
   (Test / compile).toTask.value
+  (IntegrationTest2 / compile).toTask.value
   getDatasetsTask.value
 }
 
@@ -311,27 +275,22 @@ publishBlob := {
 
   val blobMavenFolder = organization.value.replace(".", "/") +
     s"/$nameAndScalaVersion/${version.value}"
-  uploadToBlob(localPackageFolder, blobMavenFolder, "maven", s.log)
+  uploadToBlob(localPackageFolder, blobMavenFolder, "maven",  s.log)
 }
 
 val release = TaskKey[Unit]("release", "publish the library to mmlspark blob")
 release := Def.taskDyn {
   val v = isSnapshot.value
-  if (!v) {
-    Def.task {
-      sonatypeBundleRelease.value
-    }
-  } else {
-    Def.task {
-      "Not a release"
-    }
+  if (!v){
+    Def.task {sonatypeBundleRelease.value}
+  }else{
+    Def.task {"Not a release"}
   }
 }
 
 val publishBadges = TaskKey[Unit]("publishBadges", "publish badges to mmlspark blob")
 publishBadges := {
   val s = streams.value
-
   def enc(s: String): String = {
     s.replaceAllLiterally("_", "__").replaceAllLiterally(" ", "_").replaceAllLiterally("-", "--")
   }
@@ -342,13 +301,12 @@ publishBadges := {
     Process(Seq("curl",
       "-o", join(badgeDir.toString, filename).toString,
       s"https://img.shields.io/badge/${enc(left)}-${enc(right)}-${enc(color)}")
-      , new File(".")) ! s.log
+    , new File(".")) ! s.log
     singleUploadToBlob(
       join(badgeDir.toString, filename).toString,
-      s"badges/$filename", "icons", s.log, extraArgs = Seq("--content-cache-control", "no-cache"))
+      s"badges/$filename", "icons",  s.log, extraArgs=Seq("--content-cache-control", "no-cache"))
   }
-
-  uploadBadge("master version", version.value, "blue", "master_version3.svg")
+  uploadBadge("master version", version.value,"blue", "master_version3.svg")
 }
 
 val settings = Seq(
@@ -356,23 +314,23 @@ val settings = Seq(
   logBuffered in Test := false,
   buildInfoKeys := Seq[BuildInfoKey](
     name, version, scalaVersion, sbtVersion,
-    baseDirectory, datasetDir, pythonizedVersion),
+    baseDirectory, datasetDir),
   parallelExecution in Test := false,
   test in assembly := {},
   assemblyMergeStrategy in assembly := {
-    case PathList("META-INF", xs@_*) => MergeStrategy.discard
+    case PathList("META-INF", xs @ _*) => MergeStrategy.discard
     case x => MergeStrategy.first
   },
-  assemblyOption in assembly := (assemblyOption in assembly).value.copy(includeScala = false),
-  buildInfoPackage := "com.microsoft.ml.spark.build") //++
+  buildInfoPackage := "com.microsoft.ml.spark.build") ++
+  inConfig(IntegrationTest2)(Defaults.testSettings)
 
 lazy val mmlspark = (project in file("."))
+  .configs(IntegrationTest2)
   .enablePlugins(BuildInfoPlugin)
   .enablePlugins(ScalaUnidocPlugin)
   .settings(settings: _*)
 
 import xerial.sbt.Sonatype._
-
 sonatypeProjectHosting := Some(
   GitHubHosting("Azure", "MMLSpark", "mmlspark-support@microsot.com"))
 homepage := Some(url("https://github.com/Azure/mmlspark"))
@@ -397,16 +355,14 @@ pgpPassphrase := Some(Secrets.pgpPassword.toCharArray)
 pgpSecretRing := {
   val temp = File.createTempFile("secret", ".asc")
   new PrintWriter(temp) {
-    write(Secrets.pgpPrivate);
-    close()
+    write(Secrets.pgpPrivate); close()
   }
   temp
 }
 pgpPublicRing := {
   val temp = File.createTempFile("public", ".asc")
   new PrintWriter(temp) {
-    write(Secrets.pgpPublic);
-    close()
+    write(Secrets.pgpPublic); close()
   }
   temp
 }

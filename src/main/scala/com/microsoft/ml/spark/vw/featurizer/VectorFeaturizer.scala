@@ -13,7 +13,7 @@ import scala.collection.mutable
   * @param fieldIdx input field index.
   * @param mask bit mask applied to final hash.
   */
-private[ml] class VectorFeaturizer(override val fieldIdx: Int, override val columnName: String, val mask: Int)
+class VectorFeaturizer(override val fieldIdx: Int, override val columnName: String, val mask: Int)
   extends Featurizer(fieldIdx) {
 
   /**

@@ -15,10 +15,10 @@ import scala.collection.mutable
   * @param namespaceHash pre-hashed namespace.
   * @param mask bit mask applied to final hash.
   */
-private[ml] class BooleanFeaturizer(override val fieldIdx: Int,
+class BooleanFeaturizer(override val fieldIdx: Int,
                         override val columnName: String,
                         namespaceHash: Int, mask: Int)
-  extends Featurizer(fieldIdx) with ElementFeaturizer[Boolean] {
+  extends Featurizer(fieldIdx) {
 
   /**
     * Pre-hashed feature index.
@@ -36,17 +36,12 @@ private[ml] class BooleanFeaturizer(override val fieldIdx: Int,
   override def featurize(row: Row,
                          indices: mutable.ArrayBuilder[Int],
                          values: mutable.ArrayBuilder[Double]): Unit = {
-
-    featurize(0, row.getBoolean(fieldIdx), indices, values)
-  }
-
-  def featurize(idx: Int,
-                value: Boolean,
-                indices: mutable.ArrayBuilder[Int],
-                values: mutable.ArrayBuilder[Double]): Unit = {
-    if (value) {
-      indices += featureIdx + idx
-      values += 1.0
+    if (row.getBoolean(fieldIdx)) {
+        indices += featureIdx
+        values += 1.0
     }
+
+    ()
   }
 }
+

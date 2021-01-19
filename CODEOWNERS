@@ -12,11 +12,4 @@ train/           @imatiach-msft
 recommendation/  @dciborow
 
 # Dalitso's Areas
-tools/helm/      @dbanda
-
-# Markus' Areas
-vw/              @eisber
-isolationforest/ @eisber
-
-#Roy's Areas
-cyber/           @rolevin
+/tools/helm      @dbanda

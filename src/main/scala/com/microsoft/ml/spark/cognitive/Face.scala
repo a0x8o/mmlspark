@@ -3,6 +3,7 @@
 
 package com.microsoft.ml.spark.cognitive
 
+import com.microsoft.ml.spark.cognitive.cognitive.{Face, FaceGrouping, FoundFace, IdentifiedFace}
 import org.apache.http.entity.{AbstractHttpEntity, StringEntity}
 import org.apache.spark.ml.ComplexParamsReadable
 import org.apache.spark.ml.param.ServiceParam
@@ -11,6 +12,8 @@ import org.apache.spark.sql.Row
 import org.apache.spark.sql.types._
 import spray.json.DefaultJsonProtocol._
 import spray.json._
+
+import scala.util.Try
 
 object DetectFace extends ComplexParamsReadable[DetectFace]
 

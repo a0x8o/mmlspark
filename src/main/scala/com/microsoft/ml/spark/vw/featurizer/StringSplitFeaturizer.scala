@@ -3,6 +3,7 @@
 
 package com.microsoft.ml.spark.vw.featurizer
 
+import com.microsoft.ml.spark.vw.VowpalWabbitMurmurWithPrefix
 import org.apache.spark.sql.Row
 
 import scala.collection.mutable
@@ -15,7 +16,7 @@ import scala.util.matching.Regex
   * @param namespaceHash pre-hashed namespace.
   * @param mask bit mask applied to final hash.
   */
-private[ml] class StringSplitFeaturizer(override val fieldIdx: Int,
+class StringSplitFeaturizer(override val fieldIdx: Int,
                             override val columnName: String,
                             val namespaceHash: Int,
                             val mask: Int)
